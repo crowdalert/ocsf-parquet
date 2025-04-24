@@ -30,7 +30,14 @@ def get_basic_type(type_name: str, types: Dict[str, Any]) -> str:
     
     return "BYTE_ARRAY {} (STRING)"
 
-def process_attributes(attributes: Dict[str, Any], schema: Dict[str, Any], processed_objects: Set[str], indent: int = 2) -> List[str]:
+def process_attributes(
+    attributes: Dict[str, Any],
+    schema: Dict[str, Any],
+    processed_objects: Set[str],
+    indent: int = 2,
+    prefix: str = "",
+    processed_attrs: Set[str] = None,
+) -> List[str]:
     """Process attributes into Parquet field definitions with recursive object resolution."""
     if not attributes:
         return []
@@ -38,7 +45,18 @@ def process_attributes(attributes: Dict[str, Any], schema: Dict[str, Any], proce
     lines = []
     indent_str = " " * indent
 
+    # Initialize processed_attrs set if not provided
+    if processed_attrs is None:
+        processed_attrs = set()
+
     for name, attr in attributes.items():
+        processed_name = f"{prefix}:{name}"
+
+        if processed_name in processed_attrs:
+            continue
+
+        processed_attrs.add(processed_name)
+
         if not attr:
             continue
 
@@ -62,22 +80,60 @@ def process_attributes(attributes: Dict[str, Any], schema: Dict[str, Any], proce
                 lines.append(f"{indent_str}  repeated group list {{")
                 # Process all attributes of the referenced object
                 if "attributes" in obj_def:
-                    lines.extend(process_attributes(obj_def["attributes"], schema, processed_objects, indent + 4))
+                    lines.extend(
+                        process_attributes(
+                            obj_def["attributes"],
+                            schema,
+                            processed_objects,
+                            indent + 4,
+                            prefix=processed_name,
+                            processed_attrs=processed_attrs,
+                        )
+                    )
+
                 # If object extends another, process those attributes too
                 if "extends" in obj_def and obj_def["extends"] in schema["objects"]:
                     base_obj = schema["objects"][obj_def["extends"]]
                     if "attributes" in base_obj:
-                        lines.extend(process_attributes(base_obj["attributes"], schema, processed_objects, indent + 4))
+                        lines.extend(
+                            process_attributes(
+                                base_obj["attributes"],
+                                schema,
+                                processed_objects,
+                                indent + 4,
+                                prefix=processed_name,
+                                processed_attrs=processed_attrs,
+                            )
+                        )
+
                 lines.append(f"{indent_str}  }}")
                 lines.append(f"{indent_str}}}")
             else:
                 lines.append(f"{indent_str}optional group {name} {{")
                 if "attributes" in obj_def:
-                    lines.extend(process_attributes(obj_def["attributes"], schema, processed_objects, indent + 2))
+                    lines.extend(
+                        process_attributes(
+                            obj_def["attributes"],
+                            schema,
+                            processed_objects,
+                            indent + 2,
+                            prefix=processed_name,
+                            processed_attrs=processed_attrs,
+                        )
+                    )
                 if "extends" in obj_def and obj_def["extends"] in schema["objects"]:
                     base_obj = schema["objects"][obj_def["extends"]]
                     if "attributes" in base_obj:
-                        lines.extend(process_attributes(base_obj["attributes"], schema, processed_objects, indent + 2))
+                        lines.extend(
+                            process_attributes(
+                                base_obj["attributes"],
+                                schema,
+                                processed_objects,
+                                indent + 2,
+                                prefix=processed_name,
+                                processed_attrs=processed_attrs,
+                            )
+                        )
                 lines.append(f"{indent_str}}}")
             processed_objects.remove(type_name)
         else:
@@ -94,13 +150,17 @@ def process_attributes(attributes: Dict[str, Any], schema: Dict[str, Any], proce
 
     return lines
 
-def generate_class_schema(class_name: str, class_def: Dict[str, Any], schema: Dict[str, Any]) -> str:
+def generate_class_schema(
+    class_name: str, class_def: Dict[str, Any], schema: Dict[str, Any]
+) -> str:
     """Generate Parquet schema definition for a single class."""
     lines = [f"message {class_name} {{"]
     
     if class_def.get("attributes"):
         processed_objects = set()
-        lines.extend(process_attributes(class_def["attributes"], schema, processed_objects))
+        lines.extend(
+            process_attributes(class_def["attributes"], schema, processed_objects)
+        )
     
     lines.append("}")
     return "\n".join(lines)
@@ -112,8 +172,14 @@ def generate_schemas(schema: Dict[str, Any]) -> List[str]:
     for class_name, class_def in schema.get("classes", {}).items():
         if class_def.get("@deprecated"):
             continue
-            
-        schemas.append((class_def.get("category"), class_name, generate_class_schema(class_name, class_def, schema)))
+
+        schemas.append(
+            (
+                class_def.get("category"),
+                class_name,
+                generate_class_schema(class_name, class_def, schema),
+            )
+        )
     
     return schemas
 
